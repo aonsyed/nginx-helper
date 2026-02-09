@@ -2,7 +2,7 @@
 /**
  * Utility functions used in the plugin.
  *
- * @package nginx-helper
+ * @package gridpane-nginx-helper
  */
 
 /**

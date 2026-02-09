@@ -74,7 +74,7 @@ class Nginx_Helper {
 	 */
 	public function __construct() {
 
-		$this->plugin_name = 'nginx-helper';
+		$this->plugin_name = 'gridpane-nginx-helper';
 		$this->version     = '9.9.11';
 		$this->minimum_wp  = '3.0';
 

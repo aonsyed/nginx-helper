@@ -6,7 +6,7 @@
  *
  * @since      2.0.0
  *
- * @package    nginx-helper
+ * @package    gridpane-nginx-helper
  * @subpackage nginx-helper/admin/partials
  */
 

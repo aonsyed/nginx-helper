@@ -2,7 +2,7 @@
 /**
  * Autoloader to load the files.
  *
- * @package nginx-helper
+ * @package gridpane-nginx-helper
  */
 
 
