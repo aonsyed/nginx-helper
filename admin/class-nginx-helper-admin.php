@@ -6,6 +6,8 @@
  * @subpackage nginx-helper/admin
  */
 
+use EasyCache\Cloudflare_Client;
+
 /**
  * The admin-specific functionality of the plugin.
  *
@@ -54,6 +56,15 @@ class Nginx_Helper_Admin {
 	public $options;
 
 	/**
+	 * Cloudflare options.
+	 *
+	 * @since    2.3.5
+	 * @access   public
+	 * @var      string[] $cf_options Cloudflare options.
+	 */
+	public $cf_options;
+
+	/**
 	 * WP-CLI Command.
 	 *
 	 * @since    2.0.0
@@ -74,7 +85,8 @@ class Nginx_Helper_Admin {
 	    $this->version     = $version;
 
 	    // Initialize options early.
-	    $this->options = $this->nginx_helper_settings();
+	    $this->options     = $this->nginx_helper_settings();
+	    $this->cf_options  = $this->get_cloudflare_settings();
 	}
 
 	/**
@@ -90,12 +102,16 @@ class Nginx_Helper_Admin {
 			'rt_nginx_helper_settings_tabs',
 			array(
 				'general' => array(
-					'menu_title' => __( 'General', 'nginx-helper' ),
+					'menu_title' => __( 'General', 'gridpane-nginx-helper' ),
 					'menu_slug'  => 'general',
 				),
 				'support' => array(
-					'menu_title' => __( 'Support', 'nginx-helper' ),
+					'menu_title' => __( 'Support', 'gridpane-nginx-helper' ),
 					'menu_slug'  => 'support',
+				),
+				'cloudflare' => array(
+					'menu_title' => __( 'Cloudflare', 'gridpane-nginx-helper' ),
+					'menu_slug'  => 'cloudflare',
 				),
 			)
 		);
@@ -222,6 +238,7 @@ class Nginx_Helper_Admin {
 			array(
 				'nginx_helper_action' => 'purge',
 				'nginx_helper_urls'   => $nginx_helper_urls,
+				'nginx_helper_dismiss' => get_transient( 'rt_wp_nginx_helper_suggest_purge_notice' ),
 			)
 		);
 
@@ -284,6 +301,9 @@ class Nginx_Helper_Admin {
 			'redis_password'                        => '',
 			'redis_database'                        => 0,
 			'purge_url'                             => '',
+			'redis_enabled_by_constant'             => 0,
+			'redis_socket_enabled_by_constant'      => 0,
+			'redis_acl_enabled_by_constant'         => 0,
 			'auth_enabled_by_constant'              => 0,
 			'cache_method_set_by_constant'          => 0,
 			'purge_method_set_by_constant'          => 0,
@@ -293,15 +313,17 @@ class Nginx_Helper_Admin {
 			'redis_prefix_set_by_constant'          => 0,
 			'redis_database_set_by_constant'        => 0,
 			'redis_username_set_by_constant'        => 0,
-			'redis_password_socket_set_by_constant' => 0,
+			'redis_password_set_by_constant'        => 0,
 			'homepage_purge_post_type_exceptions'   => array(),
 			'preload_cache'                         => 0,
 			'is_cache_preloaded'                    => 0,
 			'purge_amp_urls'                        => 1,
 			'purge_on_update'                       => 0,
-			'purge_on_plugin_activation'           => 0,
-			'purge_on_plugin_deactivation'         => 0,
+			'purge_on_plugin_activation'            => 0,
+			'purge_on_plugin_deactivation'          => 0,
 			'purge_on_theme_change'                 => 1,
+			'roles_with_purge_cap'                  => array(),
+			'purge_woo_products'                    => 0,
 		);
 
 	}
@@ -326,7 +348,60 @@ class Nginx_Helper_Admin {
         $diffed_options = wp_parse_args( $options, $default_settings );
 
         add_site_option( 'rt_wp_nginx_helper_options', $diffed_options );
-    }
+
+		$this->store_cloudflare_settings();
+	}
+
+	/**
+	 * Gets the default settings for cloudflare.
+	 *
+	 * @return array An array of settings.
+	 */
+	public function get_cloudflare_default_settings() {
+		return array(
+			'api_token'                     => '',
+			'zone_id'                       => '',
+			'default_cache_ttl'             => 604800,
+			'api_token_enabled_by_constant' => false,
+		);
+	}
+
+	/**
+	 * Gets the current cloudflare settings.
+	 *
+	 * @return array The current settings.
+	 */
+	public function get_cloudflare_settings() {
+		$default_settings = $this->get_cloudflare_default_settings();
+
+		$stored_options = get_site_option( 'easycache_cf_settings', array() );
+
+		if ( defined( 'EASYCACHE_CLOUDFLARE_API_TOKEN' ) && !empty( EASYCACHE_CLOUDFLARE_API_TOKEN ) ) {
+			$stored_options['api_token']                     = EASYCACHE_CLOUDFLARE_API_TOKEN;
+			$stored_options['api_token_enabled_by_constant'] = true;
+		}
+
+		$diff_options = wp_parse_args( $stored_options, $default_settings );
+
+		$diff_options['is_enabled'] = ! empty( $diff_options['api_token'] ) && ! empty( $diff_options['zone_id'] );
+
+		return $diff_options;
+	}
+
+	/**
+	 * Stores the cloudflare settings.
+	 *
+	 * @return array The current settings.
+	 */
+	public function store_cloudflare_settings() {
+		$default_settings = $this->get_cloudflare_default_settings();
+
+		$stored_options = get_site_option( 'easycache_cf_settings', array() );
+
+		$diff_options = wp_parse_args( $stored_options, $default_settings );
+
+		add_site_option( 'easycache_cf_settings', $diff_options );
+	}
 
 	/**
 	 * Get settings.
@@ -376,6 +451,10 @@ class Nginx_Helper_Admin {
 		$redis_port                                = false;
 		$redis_unix_socket                         = false;
 
+		// rtCamp: Set ACL and socket enabled flags
+		$data['redis_acl_enabled_by_constant']    = defined('RT_WP_NGINX_HELPER_REDIS_USERNAME') && defined('RT_WP_NGINX_HELPER_REDIS_PASSWORD');
+		$data['redis_socket_enabled_by_constant'] = defined('RT_WP_NGINX_HELPER_REDIS_UNIX_SOCKET');
+
 		if ( defined( 'RT_WP_NGINX_HELPER_REDIS_PREFIX' ) ) {
 			$redis_prefix                         = RT_WP_NGINX_HELPER_REDIS_PREFIX;
 			$data['redis_prefix']                 = $redis_prefix;
@@ -415,6 +494,11 @@ class Nginx_Helper_Admin {
 			$data['redis_password_set_by_constant'] = 1;
 		}
 
+		// rtCamp: Set socket/username/password via ternary for ACL/socket
+		$data['redis_unix_socket'] = $data['redis_socket_enabled_by_constant'] ? RT_WP_NGINX_HELPER_REDIS_UNIX_SOCKET : $data['redis_unix_socket'];
+		$data['redis_username']    = $data['redis_acl_enabled_by_constant'] ? RT_WP_NGINX_HELPER_REDIS_USERNAME : $data['redis_username'];
+		$data['redis_password']    = $data['redis_acl_enabled_by_constant'] ? RT_WP_NGINX_HELPER_REDIS_PASSWORD : $data['redis_password'];
+
 		if ( $redis_prefix && $redis_hostname && $redis_port ) {
 			$redis_tcp_connection_enabled_by_constants = true;
 		}
@@ -426,6 +510,8 @@ class Nginx_Helper_Admin {
 		if ( $redis_tcp_connection_enabled_by_constants || $redis_unix_socket_enabled_by_constants ) {
 			$data['enable_purge']              = 1;
 			$data['cache_method']              = 'enable_redis';
+			// rtCamp: Set redis_enabled_by_constant flag
+			$data['redis_enabled_by_constant'] = true;
 		}
 
 		return $data;
@@ -504,6 +590,66 @@ class Nginx_Helper_Admin {
 	}
 
 	/**
+	 * Get latest news.
+	 *
+	 * @since     2.0.0
+	 */
+	public function nginx_helper_get_feeds() {
+
+		// Get RSS Feed(s).
+		require_once ABSPATH . WPINC . '/feed.php';
+
+		$maxitems  = 0;
+		$rss_items = array();
+
+		// Get a SimplePie feed object from the specified feed source.
+		$rss = fetch_feed( 'https://rtcamp.com/blog/feed/' );
+
+		if ( ! is_wp_error( $rss ) ) { // Checks that the object is created correctly.
+
+			// Figure out how many total items there are, but limit it to 5.
+			$maxitems = $rss->get_item_quantity( 5 );
+			// Build an array of all the items, starting with element 0 (first element).
+			$rss_items = $rss->get_items( 0, $maxitems );
+
+		}
+		?>
+		<ul role="list">
+			<?php
+			if ( 0 === $maxitems ) {
+				echo '<li role="listitem">' . esc_html__( 'No items', 'gridpane-nginx-helper' ) . '.</li>';
+			} else {
+
+				// Loop through each feed item and display each item as a hyperlink.
+				foreach ( $rss_items as $item ) {
+					?>
+						<li role="listitem">
+							<?php
+								printf(
+									'<a href="%s" title="%s">%s</a>',
+									esc_url( $item->get_permalink() ),
+									esc_attr(
+										sprintf(
+											/* translators: %s: date/time the feed item as been posted */
+											__( 'Posted %s', 'gridpane-nginx-helper' ),
+											$item->get_date( 'j F Y | g:i a' )
+										)
+									),
+									esc_html( $item->get_title() )
+								);
+							?>
+						</li>
+					<?php
+				}
+			}
+			?>
+		</ul>
+		<?php
+		die();
+
+	}
+
+	/**
 	 * Add time stamps in html.
 	 */
 	public function add_timestamps() {
@@ -547,7 +693,8 @@ class Nginx_Helper_Admin {
 		$timestamps = "\n<!--" .
 			'Cached using Nginx-Helper on ' . current_time( 'mysql' ) . '. ' .
 			'It took ' . get_num_queries() . ' queries executed in ' . timer_stop() . ' seconds.' .
-			"-->\n";
+			"-->\n" .
+			'<!--Visit http://wordpress.org/extend/plugins/nginx-helper/faq/ for more details-->';
 
 		echo wp_kses( $timestamps, array() );
 
@@ -829,6 +976,10 @@ class Nginx_Helper_Admin {
 
 		}
 
+		if( $this->cf_options['is_enabled'] ) {
+			Cloudflare_Client::purgeEverything();
+		}
+
 		wp_redirect( esc_url_raw( $redirect_url ) );
 		exit();
 
@@ -922,20 +1073,20 @@ class Nginx_Helper_Admin {
 		if ( false === $xml ) {
 			return new WP_Error( 'sitemap_parse_error', esc_html__( 'Failed to parse the sitemap XML', 'gridpane-nginx-helper' ) );
 		}
-		
+
 		$urls = array();
-		
+
 		if ( false === $xml ) {
 			return $urls;
 		}
-		
+
 		foreach ( $xml->url as $url ) {
 			$urls[] = (string) $url->loc;
 		}
-		
+
 		return $urls;
 	}
-	
+
 	/**
 	* Determines if the current request is for importing Posts/ WordPress content.
 	*
@@ -944,10 +1095,298 @@ class Nginx_Helper_Admin {
 	public function is_import_request() {
 		$import_query_var   = sanitize_text_field( wp_unslash( $_GET['import'] ?? '' ) ); //phpcs:ignore WordPress.Security.NonceVerification.Recommended -- Nonce is already in the admin dashboard.
 		$has_import_started = did_action( 'import_start' );
-		
+
 		return ( defined( 'WP_IMPORTING' ) && true === WP_IMPORTING )
 			|| 0 !== $has_import_started
 			|| ! empty( $import_query_var );
 	}
-	
+
+	/**
+	 * Sync purge capability with selected roles.
+	 */
+	public function nginx_helper_update_role_caps() {
+		$purge_cap = 'Nginx Helper | Purge cache';
+
+		// Get all available roles.
+		$all_roles    = wp_roles()->get_names();
+		$site_options = get_site_option( 'rt_wp_nginx_helper_options', array() );
+
+		// Roles selected in settings.
+		$selected_roles = isset( $site_options['roles_with_purge_cap'] ) && is_array( $site_options['roles_with_purge_cap'] )
+			? $site_options['roles_with_purge_cap']
+			: array();
+
+		foreach ( $all_roles as $role_key => $role_name ) {
+			$role = get_role( $role_key );
+
+			if ( ! $role || 'administrator' === $role_key ) {
+				continue;
+			}
+
+			// If role is NOT selected, remove cap and continue.
+			if ( ! isset( $selected_roles[ $role_key ] ) ) {
+				$role->remove_cap( $purge_cap );
+				continue;
+			}
+
+			// If selected, make sure cap is added.
+			$role->add_cap( $purge_cap );
+		}
+	}
+
+	/**
+	 * Automatically purges Nginx cache on any WordPress core, plugin, or theme update if enabled.
+	 *
+	 * @param WP_Upgrader $upgrader_object WP_Upgrader instance.
+	 * @param array       $options Array of bulk item update data.
+	 */
+	public function nginx_helper_auto_purge_on_any_update( $upgrader_object, $options ) {
+
+		if ( ! isset( $options['action'], $options['type'] )
+			|| 'update' !== $options['action']
+			|| ! in_array( $options['type'], array( 'core', 'plugin', 'theme' ), true ) ) {
+			return;
+		}
+		if ( ! defined( 'NGINX_HELPER_AUTO_PURGE_ON_ANY_UPDATE' ) || ! NGINX_HELPER_AUTO_PURGE_ON_ANY_UPDATE ) {
+			set_transient( 'rt_wp_nginx_helper_suggest_purge_notice', true, HOUR_IN_SECONDS );
+			return;
+		}
+		global $nginx_purger;
+
+		$nginx_purger->purge_all();
+	}
+
+	/**
+	 * Displays an admin notice suggesting the user to purge cache after a WordPress update.
+	 */
+	public function suggest_purge_after_update() {
+
+		if ( ! get_transient( 'rt_wp_nginx_helper_suggest_purge_notice' ) ) {
+			return;
+		}
+
+		$setting_page  = is_network_admin() ? 'settings.php' : 'options-general.php';
+		$settings_link = network_admin_url( $setting_page . '?page=nginx' );
+		$dismiss_url   = wp_nonce_url( add_query_arg( 'nginx_helper_dismiss', 'true' ), 'nginx_helper_dismiss_notice' );
+		?>
+		<div class="notice notice-info">
+			<p>
+				<?php
+				esc_html_e( 'A WordPress update was detected. It is recommended to purge the cache to ensure your site displays the latest changes.', 'gridpane-nginx-helper' );
+				?>
+				<a href="<?php echo esc_url( $settings_link ); ?>"><?php esc_html_e( 'Go & Purge Cache', 'gridpane-nginx-helper' ); ?></a>
+				|
+				<a href="<?php echo esc_url( $dismiss_url ); ?>">
+				<?php esc_html_e( 'Dismiss', 'gridpane-nginx-helper' ); ?>
+				</a>
+			</p>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Dismisses the "suggest purge" admin notice when the user clicks the dismiss link.
+	 */
+	public function dismiss_suggest_purge_after_update() {
+
+		if ( ! isset( $_GET['nginx_helper_dismiss'] ) || ! isset( $_GET['_wpnonce'] ) ) {
+			return;
+		}
+
+		$dismiss          = sanitize_text_field( wp_unslash( $_GET['nginx_helper_dismiss'] ) );
+		$nonce            = sanitize_text_field( wp_unslash( $_GET['_wpnonce'] ) );
+
+		// Verify the correct nonce depending on whether this is a purge+dismiss or dismiss-only request.
+		$has_purge_params = isset( $_GET['nginx_helper_action'], $_GET['nginx_helper_urls'] );
+		$nonce_verified   = $has_purge_params ? wp_verify_nonce( $nonce, 'nginx_helper-purge_all' ) : wp_verify_nonce( $nonce, 'nginx_helper_dismiss_notice' );
+
+		if ( $dismiss && $nonce_verified ) {
+
+			delete_transient( 'rt_wp_nginx_helper_suggest_purge_notice' );
+			wp_safe_redirect( remove_query_arg( array( 'nginx_helper_dismiss', '_wpnonce' ) ) );
+			exit;
+		}
+	}
+
+	/**
+	 * Initialize WooCommerce hooks if enabled.
+	 *
+	 * @since 2.3.5
+	 */
+	public function init_woocommerce_hooks() {
+		if ( ! is_plugin_active( 'woocommerce/woocommerce.php' ) || empty( $this->options['purge_woo_products'] ) ) {
+			return;
+		}
+
+		add_action( 'woocommerce_reduce_order_stock', array( $this, 'purge_product_cache_on_purchase' ), 10, 1 );
+		add_action( 'woocommerce_update_product', array( $this, 'purge_product_cache_on_update' ), 10, 1 );
+	}
+
+	/**
+	 * Purge product cache when order stock is reduced (purchase).
+	 *
+	 * @since  2.3.5
+	 * @global object $nginx_purger Nginx purger object.
+	 * @param  object $order Order object.
+	 */
+	public function purge_product_cache_on_purchase( $order ) {
+
+		global $nginx_purger;
+
+		if ( ! $order instanceof WC_Order ) {
+			return;
+		}
+
+		if ( ! $this->options['enable_purge'] ) {
+			return;
+		}
+
+		$nginx_purger->log( 'WooCommerce order stock reduction - purging product caches' );
+
+		foreach ( $order->get_items() as $item ) {
+			$product = $item->get_product();
+			if ( ! $product ) {
+				continue;
+			}
+
+			$product_id = $product->get_id();
+			$nginx_purger->log( 'Purging cache for product ID: ' . $product_id . ' due to purchase' );
+
+			$product_url = get_permalink( $product_id );
+
+			if ( $product_url ) {
+				$nginx_purger->purge_url( $product_url );
+			}
+		}
+	}
+
+	/**
+	 * Purge product cache when a product is updated via REST API.
+	 *
+	 * @since 2.3.5
+	 * @global object $nginx_purger Nginx purger object.
+	 * @param int $product_id Product ID.
+	 */
+	public function purge_product_cache_on_update( $product_id ) {
+		global $nginx_purger;
+
+		if ( empty( $nginx_purger ) ) {
+			return;
+		}
+
+		if ( ! $this->options['enable_purge'] ) {
+			return;
+		}
+
+		$nginx_purger->log( 'WooCommerce product update - purging cache for product ID: ' . $product_id );
+
+		$product_url = get_permalink( $product_id );
+
+		if ( $product_url ) {
+			$nginx_purger->purge_url( $product_url );
+		}
+	}
+
+	/**
+	 * Handles the cache rule update on Cloudflare tab.
+	 *
+	 * @return void
+	 */
+	public function handle_cf_cache_rule_update() {
+		$nonce = isset( $_POST['easycache_add_cache_rule_nonce'] ) ? wp_unslash( $_POST['easycache_add_cache_rule_nonce'] ) : '';
+
+		if ( wp_verify_nonce( $nonce, 'easycache_add_cache_rule_nonce' ) ) {
+
+			if ( ! current_user_can( 'manage_options' ) ) {
+				return;
+			}
+
+			$result = EasyCache\Cloudflare_Client::setupCacheRule();
+
+			set_transient( 'ec_page_rule_save_state_admin_notice', $result, 60 );
+		}
+	}
+
+	/**
+	 * Display admin notices for cloudflare page save rules.
+	 */
+	public function cf_page_rule_save_display_admin_notices() {
+		if ( $result = get_transient( 'ec_page_rule_save_state_admin_notice' ) ) {
+			$class   = 'notice';
+			$message = '';
+
+			switch ( $result ) {
+				case 'created':
+					$class   .= ' notice-success';
+					$message = __( 'The Cloudflare Cache Rule was created successfully.', 'gridpane-nginx-helper' );
+					break;
+				case 'exists':
+					$class   .= ' notice-info';
+					$message = __( 'The Cache Rule already exists. No action was taken.', 'gridpane-nginx-helper' );
+					break;
+				default:
+					$class   .= ' notice-error';
+					$message = __( 'Failed to create the Cache Rule. Please check that your API Token has Cache Rules Read/Write permissions.', 'gridpane-nginx-helper' );
+					break;
+			}
+
+			printf( '<div class="%1$s"><p>%2$s</p></div>', esc_attr( $class ), esc_html( $message ) );
+			delete_transient( 'ec_page_rule_save_state_admin_notice' );
+		}
+	}
+
+	/**
+	 * Register a toolbar button to purge the cache for the current page.
+	 *
+	 * @param object $wp_admin_bar Instance of WP_Admin_Bar.
+	 */
+	public static function add_cloudflare_admin_bar_purge( $wp_admin_bar ) {
+		if ( is_admin() || ! is_user_logged_in() || ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+
+		if ( ! empty( $_GET['message'] ) && 'ec-cleared-url-cache' === $_GET['message'] ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			$title = esc_html__( 'URL Cache Cleared', 'gridpane-nginx-helper' );
+		} else {
+			$title = esc_html__( 'Clear URL Cache', 'gridpane-nginx-helper' );
+		}
+
+		$request_uri = isset( $_SERVER['REQUEST_URI'] ) ? sanitize_text_field( $_SERVER['REQUEST_URI'] ) : '';
+		$wp_admin_bar->add_menu( [
+			'parent' => '',
+			'id'     => 'clear-page-cache',
+			'title'  => $title,
+			'meta'   => [
+				'title' => __( 'Purge the current URL from Cloudflare cache.', 'gridpane-nginx-helper' ),
+			],
+			'href'   => wp_nonce_url( admin_url( 'admin-ajax.php?action=ec_clear_url_cache&path=' . rawurlencode( home_url( $request_uri ) ) ), 'ec-clear-url-cache' ),
+		] );
+	}
+
+	/**
+	 * Handle an admin-ajax request to clear the URL cache for Cloudflare.
+	 *
+	 * @return void
+	 */
+	public static function handle_cloudflare_clear_cache_ajax() {
+		$nonce = isset( $_GET['_wpnonce'] ) ? sanitize_text_field( $_GET['_wpnonce'] ) : '';
+		if ( empty( $nonce )
+			 || ! wp_verify_nonce( $nonce, 'ec-clear-url-cache' )
+			 || ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( "You shouldn't be doing this.", 'gridpane-nginx-helper' ) );
+		}
+
+		$path = isset( $_GET['path'] ) ? esc_url_raw( $_GET['path'] ) : '';
+		if ( empty( $path ) ) {
+			wp_die( esc_html__( 'No path provided.', 'gridpane-nginx-helper' ) );
+		}
+
+		$ret = Cloudflare_Client::purgeByUrls( [ $path ] );
+		if ( ! $ret ) {
+			wp_die( esc_html__( 'Failed to clear URL cache.', 'gridpane-nginx-helper' ) );
+		}
+
+		wp_safe_redirect( add_query_arg( 'message', 'ec-cleared-url-cache', $path ) );
+		exit;
+	}
 }

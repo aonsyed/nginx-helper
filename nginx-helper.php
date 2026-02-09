@@ -3,7 +3,7 @@
  * Plugin Name:       GridPane Nginx Helper
  * Plugin URI:        https://gridpane.com
  * Description:       Cleans nginx's fastcgi/proxy cache or redis-cache whenever a post is edited/published. Also does few more things.
- * Version:           9.9.10
+ * Version:           9.9.11
  * Author:            GridPane
  * Author URI:        https://gridpane.com
  * Text Domain:       gridpane-nginx-helper
@@ -18,6 +18,11 @@
 // If this file is called directly, abort.
 if ( ! defined( 'WPINC' ) ) {
 	die;
+}
+
+// Load Composer dependencies.
+if ( file_exists( __DIR__ . '/vendor/autoload.php' ) ) {
+	require_once __DIR__ . '/vendor/autoload.php';
 }
 
 /**
@@ -40,6 +45,9 @@ if ( ! defined( 'NGINX_HELPER_BASENAME' ) ) {
 if ( ! defined( 'NGINX_HELPER_BASEPATH' ) ) {
 	define( 'NGINX_HELPER_BASEPATH', plugin_dir_path( __FILE__ ) );
 }
+
+require_once NGINX_HELPER_BASEPATH . '/utils/functions.php';
+require_once NGINX_HELPER_BASEPATH . '/utils/autoloader.php';
 
 /**
  * The code that runs during plugin activation.
@@ -114,6 +122,7 @@ function run_nginx_helper() {
 
 		require_once NGINX_HELPER_BASEPATH . 'class-nginx-helper-wp-cli-command.php';
 		\WP_CLI::add_command( 'nginx-helper', 'Nginx_Helper_WP_CLI_Command' );
+		\WP_CLI::add_command( 'cloudflare cache', 'EasyCache\\CLI' );
 
 	}
 

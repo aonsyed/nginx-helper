@@ -24,12 +24,6 @@ $args = array(
 	'redis_username',
 	'redis_password',
 	'redis_database',
-//	'redis_database',
-//	'redis_username',
-//	'redis_password',
-//	'redis_unix_socket',
-//	'redis_socket_enabled_by_constant',
-//	'redis_acl_enabled_by_constant',
 	'purge_homepage_on_edit',
 	'purge_homepage_on_del',
 	'purge_url',
@@ -54,13 +48,26 @@ $args = array(
 	'purge_on_plugin_activation',
 	'purge_on_plugin_deactivation',
 	'purge_on_theme_change',
+	'roles_with_purge_cap',
+	'purge_woo_products',
 );
 
 $all_inputs = array();
 
+global $wp_roles;
+$roles      = $wp_roles->roles;
+$role_names = wp_roles()->get_names();
+
 foreach ( $args as $val ) {
+
 	if ( isset( $_POST[ $val ] ) ) {
-		$all_inputs[ $val ] = wp_strip_all_tags( $_POST[ $val ] );
+
+		// If the input is an array (like roles_with_purge_cap), sanitize each value.
+		if ( is_array( $_POST[ $val ] ) ) {
+			$all_inputs[ $val ] = array_map( 'sanitize_text_field', $_POST[ $val ] );
+		} else {
+			$all_inputs[ $val ] = wp_strip_all_tags( $_POST[ $val ] );
+		}
 	}
 }
 
@@ -947,6 +954,75 @@ if ( 'enable_redis' === $cache_method ) {
                         </td>
                     </tr>
                 </table>
+				<table class="form-table rtnginx-table">
+					<tr valign="top">
+						<th scope="row">
+							<h4>
+								<?php esc_html_e( 'Role-Based Purge Capability:', 'gridpane-nginx-helper' ); ?>
+							</h4>
+						</th>
+						<td>
+							<fieldset>
+								<?php
+								$roles_with_purge_cap = isset( $nginx_helper_settings['roles_with_purge_cap'] ) ? (array) $nginx_helper_settings['roles_with_purge_cap'] : array();
+								foreach ( $role_names as $role_key => $role_name ) {
+									if ( 'administrator' === $role_key ) {
+										continue;
+									}
+									$checked = in_array( $role_key, $roles_with_purge_cap, true ) ? 'checked' : '';
+									?>
+									<label for="roles_with_purge_cap_<?php echo esc_attr( $role_key ); ?>">
+										<input type="checkbox" value="<?php echo esc_attr( $role_key ); ?>" id="roles_with_purge_cap_<?php echo esc_attr( $role_key ); ?>" name="roles_with_purge_cap[]" <?php echo esc_attr( $checked ); ?> />
+										&nbsp;
+										<?php echo esc_html( $role_name ); ?>
+									</label>
+									<br />
+									<?php
+								}
+								?>
+								<p class="description">
+									<?php
+									esc_html_e( 'Select which roles should have the ability to purge cache. Administrators always have this capability.', 'gridpane-nginx-helper' );
+									?>
+								</p>
+							</fieldset>
+						</td>
+					</tr>
+				</table>
+				<?php if ( is_plugin_active( 'woocommerce/woocommerce.php' ) ) { ?>
+				<table class="form-table rtnginx-table">
+					<tr valign="top">
+						<th scope="row">
+							<h4>
+								<?php esc_html_e( 'WooCommerce Product Purge:', 'gridpane-nginx-helper' ); ?>
+							</h4>
+						</th>
+						<td>
+							<fieldset>
+								<legend class="screen-reader-text">
+									<span>
+										&nbsp;
+										<?php
+										esc_html_e( 'purge woo products', 'gridpane-nginx-helper' );
+										?>
+									</span>
+								</legend>
+								<label for="purge_woo_products">
+									<input type="checkbox" value="1" id="purge_woo_products" name="purge_woo_products" <?php checked( $nginx_helper_settings['purge_woo_products'], 1 ); ?> />
+									&nbsp;
+									<?php
+									echo wp_kses(
+										__( 'Purge <strong>WooCommerce product pages</strong> when stock changes or products are updated.', 'gridpane-nginx-helper' ),
+										array( 'strong' => array() )
+									);
+									?>
+								</label>
+								<br />
+							</fieldset>
+						</td>
+					</tr>
+				</table>
+				<?php } ?>
 				<table class="form-table rtnginx-table">
 					<tr valign="top">
 						<th scope="row">
